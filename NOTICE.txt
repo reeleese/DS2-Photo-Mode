@@ -1,0 +1,6 @@
+DS2 Photo Mode
+Original creator: reeleese.
+Developed alongside AI (Claude by Anthropic), directed and tested by reeleese.
+
+Licensed under the Apache License, Version 2.0 (LICENSE.txt). If you share or build
+on it, keep this NOTICE and credit reeleese as the original creator.

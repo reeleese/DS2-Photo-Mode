@@ -1,0 +1,10 @@
+LIBRARY xinput1_3.dll
+EXPORTS
+    XInputGetState = PM_XInputGetState @2
+    XInputSetState = PM_XInputSetState @3
+    XInputGetCapabilities = PM_XInputGetCapabilities @4
+    XInputEnable = PM_XInputEnable @5
+    XInputGetDSoundAudioDeviceGuids = PM_XInputGetDSoundAudioDeviceGuids @6
+    XInputGetBatteryInformation = PM_XInputGetBatteryInformation @7
+    XInputGetKeystroke = PM_XInputGetKeystroke @8
+    XInputGetStateEx = PM_XInputGetStateEx @100 NONAME

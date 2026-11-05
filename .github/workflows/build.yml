@@ -1,0 +1,41 @@
+name: build
+# Builds xinput1_3.dll from the tagged source with the pinned toolchain (ziglang 0.17.0),
+# checks the build is reproducible, and publishes the DLL and its sha256 as release assets.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.8.0"
+      - name: Native tests
+        run: bash tests/run.sh
+      - name: Build twice and compare
+        run: bash verify.sh | tee verify.txt
+      - name: Build the release files
+        run: |
+          mkdir -p dist
+          RELEASE_OUT="$PWD/dist" bash build.sh
+          cd dist
+          sha256sum xinput1_3.dll photo-mode-licenses.txt | tee SHA256SUMS
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" \
+            --notes "Built by GitHub Actions from this tag with ziglang 0.17.0. The sha256 of xinput1_3.dll is in SHA256SUMS; ./verify.sh reproduces it." \
+            dist/xinput1_3.dll dist/photo-mode-licenses.txt dist/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
