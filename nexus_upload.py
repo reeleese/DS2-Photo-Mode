@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Uploads a release to Nexus Mods through the v3 API (the calls Nexus's own upload action makes).
 
-    NEXUS_API_KEY=... python3 nexus_upload.py VERSION MAIN_ZIP SOURCE_ZIP
+    NEXUS_API_KEY=... python3 nexus_upload.py VERSION MAIN_ZIP
+    NEXUS_API_KEY=... python3 nexus_upload.py --changelog-only VERSION
 
-Each zip becomes the new version of its Nexus file (ids in nexus.json), the old one moves to
-Old versions, and the `## VERSION` section of CHANGELOG.md is posted as that version's
+The zip becomes the new version of the mod's main Nexus file (id in nexus.json), the old one moves
+to Old versions, and the `## VERSION` section of CHANGELOG.md is posted as that version's
 changelog. The changelog call only ever appends, so run this once per version. The key is
 read from the environment and goes only into the `apikey` header of calls to the API itself.
 """
@@ -80,11 +81,18 @@ def notes_for(version, text):
     return "\n".join(lines)
 
 
+def post_changelog(key, cfg, version, notes):
+    mod = api(key, "GET", f"/games/{cfg['game']}/mods/{cfg['mod_id']}")["data"]
+    api(key, "POST", f"/mods/{mod['id']}/changelogs", {"version": version, "changelog": notes})
+
+
 def main(argv):
-    if len(argv) != 4:
+    only = argv[1:2] == ["--changelog-only"]
+    args = argv[2:] if only else argv[1:]
+    if len(args) != (1 if only else 2):
         print(__doc__)
         return 2
-    version, zips = argv[1], {"main": Path(argv[2]), "source": Path(argv[3])}
+    version, zips = args[0], ({} if only else {"main": Path(args[1])})
     key = os.environ.get("NEXUS_API_KEY", "").strip()
     if not key:
         raise Fail("NEXUS_API_KEY is not set")
@@ -92,6 +100,10 @@ def main(argv):
     notes = notes_for(version, (HERE / "CHANGELOG.md").read_text(encoding="utf-8"))
     if not notes:
         raise Fail(f"CHANGELOG.md has no '## {version}' section with notes")
+    if only:
+        post_changelog(key, cfg, version, notes)
+        print(f"done: the {version} changelog was posted (Nexus only appends: run this once)")
+        return 0
     for kind, path in zips.items():
         print(f"uploading {path.name} as a new version of Nexus file {cfg['file_ids'][kind]}")
         uid = upload(key, path)
@@ -99,8 +111,7 @@ def main(argv):
             "upload_id": uid, "name": cfg["names"][kind].format(version=version), "version": version,
             "file_category": cfg["categories"][kind], "archive_existing_file": True,
             "update_mod_version": kind == "main"})
-    mod = api(key, "GET", f"/games/{cfg['game']}/mods/{cfg['mod_id']}")["data"]
-    api(key, "POST", f"/mods/{mod['id']}/changelogs", {"version": version, "changelog": notes})
+    post_changelog(key, cfg, version, notes)
     print(f"done: {version} is on Nexus, with its changelog")
     return 0
 

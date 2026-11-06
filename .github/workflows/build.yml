@@ -55,7 +55,7 @@ jobs:
         with:
           name: dist
           path: dist
-      - name: Make the Nexus zips
+      - name: Make the Nexus zip
         run: |
           v="${GITHUB_REF_NAME#v}"
           python3 - "$v" <<'PY'
@@ -68,11 +68,10 @@ jobs:
                   z.write(name, name)
               z.writestr("README.txt", open("NEXUS-README.txt", encoding="utf-8").read().replace("{version}", v))
           PY
-          git archive --format=zip -o "DS2-Photo-Mode-$v-source.zip" "$GITHUB_REF_NAME"
           sha256sum dist/xinput1_3.dll
       - name: Upload to Nexus
         env:
           NEXUS_API_KEY: ${{ secrets.NEXUS_API_KEY }}
         run: |
           v="${GITHUB_REF_NAME#v}"
-          python3 nexus_upload.py "$v" "DS2-Photo-Mode-$v.zip" "DS2-Photo-Mode-$v-source.zip"
+          python3 nexus_upload.py "$v" "DS2-Photo-Mode-$v.zip"
