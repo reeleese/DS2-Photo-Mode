@@ -170,6 +170,7 @@ static void frame(IDXGISwapChain* sc) {
     }
     if (!(snap & SNAP_HIDE)) {  // a snap in progress: nothing of ours in the picture
         ui_draw(px, py, pw, ph);
+        hint_draw(px, py, ph, dt);
     }
 
     ImGui::Render();

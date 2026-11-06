@@ -1,0 +1,7 @@
+{
+  "game": "darksouls2",
+  "mod_id": 1796,
+  "file_ids": {"main": 8281260, "source": 8281269},
+  "categories": {"main": "main", "source": "optional"},
+  "names": {"main": "DS2 Photo Mode {version}", "source": "DS2 Photo Mode {version} source"}
+}

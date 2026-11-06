@@ -162,6 +162,7 @@ void kbm_poll(Pad& pad, WORD prev_buttons, float dt) {
     if (down(VK_RIGHT)) b |= XINPUT_GAMEPAD_DPAD_RIGHT;
     if (down(VK_UP)) b |= XINPUT_GAMEPAD_DPAD_UP;
     if (down(VK_DOWN)) b |= XINPUT_GAMEPAD_DPAD_DOWN;
+    if (down('H')) b |= XINPUT_GAMEPAD_BACK;  // hide/show our panels
     if (down(VK_TAB)) b |= XINPUT_GAMEPAD_X;
     if (down(VK_BACK) || down('R')) b |= XINPUT_GAMEPAD_B;
     if (down(VK_RETURN) || down(VK_SPACE) || down(VK_LBUTTON)) b |= XINPUT_GAMEPAD_A;

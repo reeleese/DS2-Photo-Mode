@@ -55,6 +55,9 @@ void hud_frame();   // render thread, each frame: applies the wanted state
 void hud_toggle();  // Y
 bool hud_shown();
 
+// hint.cpp: the start hint (first run, or photo mode unopened for 30 days); records each opening
+void hint_draw(float px, float py, float ph, float dt);  // render thread, each frame
+
 // devchan.cpp (dev builds): file command channel for reverse engineering.
 void devchan_start();
 void devchan_frame();  // render thread: reapplies `hold` values

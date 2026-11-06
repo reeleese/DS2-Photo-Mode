@@ -39,3 +39,40 @@ jobs:
         with:
           name: dist
           path: dist/
+
+  # Uploads the release to Nexus Mods. Waits for approval: the `nexus-release` environment has
+  # a required reviewer, so the run shows a "Review deployments" button when the build is done.
+  nexus:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    environment: nexus-release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Make the Nexus zips
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          python3 - "$v" <<'PY'
+          import sys, zipfile
+          v = sys.argv[1]
+          with zipfile.ZipFile(f"DS2-Photo-Mode-{v}.zip", "w", zipfile.ZIP_DEFLATED) as z:
+              for name in ("xinput1_3.dll", "photo-mode-licenses.txt"):
+                  z.write(f"dist/{name}", name)
+              for name in ("LICENSE.txt", "NOTICE.txt"):
+                  z.write(name, name)
+              z.writestr("README.txt", open("NEXUS-README.txt", encoding="utf-8").read().replace("{version}", v))
+          PY
+          git archive --format=zip -o "DS2-Photo-Mode-$v-source.zip" "$GITHUB_REF_NAME"
+          sha256sum dist/xinput1_3.dll
+      - name: Upload to Nexus
+        env:
+          NEXUS_API_KEY: ${{ secrets.NEXUS_API_KEY }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          python3 nexus_upload.py "$v" "DS2-Photo-Mode-$v.zip" "DS2-Photo-Mode-$v-source.zip"

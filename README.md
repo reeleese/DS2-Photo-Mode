@@ -12,7 +12,7 @@ F9 turns photo mode on and off. Mouse: aim. W A S D: move. Q / E: down / up (rol
 
 `DarkSoulsII.exe` imports `XInputGetState` and `XInputSetState` from `xinput1_3.dll`, so a DLL of that name next to the exe is loaded by the game itself. It exports the same functions (`src/xinput1_3.def`) and passes them on to the system's XInput, so the pad works as normal. Being the game's XInput also lets it hand the game a neutral pad while photo mode is on. It then hooks two things with MinHook: the DXGI swap chain's `Present` (to draw the panels, `src/overlay.cpp`) and the game's camera update (`src/camera.cpp`). Such a proxy DLL with hooks is what antivirus heuristics dislike, which is why the build below is reproducible: you can check the released file is exactly this source.
 
-It writes one file, `photo-mode.log`, in `%LOCALAPPDATA%\ds2-photo-mode\`.
+It writes two small files: `photo-mode.log` in `%LOCALAPPDATA%\ds2-photo-mode\`, and `photo-mode.ini` beside the DLL, which holds the date photo mode was last opened (it decides when the start-up reminder shows).
 
 ## Build
 

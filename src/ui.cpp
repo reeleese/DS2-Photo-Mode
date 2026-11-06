@@ -161,8 +161,14 @@ static void adjust(const Row& r, CamState& c, int dir, bool tap, float dt) {
     r.set(c, v);
 }
 
+static bool g_overlay_hidden;  // Back / H: our panels and toast are not drawn (the grid stays)
+
 void ui_input(const Pad& pad, float dt) {
-    if (!g_photo_mode) return;
+    if (!g_photo_mode) {
+        g_overlay_hidden = false;  // each photo mode session starts with the panels shown
+        return;
+    }
+    if (pad.pressed & XINPUT_GAMEPAD_BACK) g_overlay_hidden = !g_overlay_hidden;
     camera_lock();
     CamState& c = camera_state();
     if (pad.pressed & XINPUT_GAMEPAD_X) g_panel = (g_panel + 1) % NPANELS;
@@ -209,6 +215,8 @@ static const char* HELPK[] = {"Click snap   Tab tabs   R reset", "WASD move   Mo
                               "Q/E roll   Ctrl/Shift slower/faster", "Q/E sink/rise   Ctrl/Shift slower/faster",
                               "Q/E down/up   Ctrl/Shift slower/faster"};
 static const char* HELPK_ADJ = "Arrows pick/adjust   Wheel zoom";
+static const char* HIDE_HELP = "Back hide panels";
+static const char* HIDE_HELPK = "H hide panels";
 static const float TAB_GAP = 18.0f, ROW_GAP = 28.0f;
 
 // The widest any panel, value or help line can be (with the selected row's "< >" arrows), so
@@ -253,6 +261,8 @@ static float fixed_width() {
     for (const char* h : HELP) fit.need(ImGui::CalcTextSize(h).x);
     for (const char* h : HELPK) fit.need(ImGui::CalcTextSize(h).x);
     fit.need(ImGui::CalcTextSize(HELPK_ADJ).x);
+    fit.need(ImGui::CalcTextSize(HIDE_HELP).x);
+    fit.need(ImGui::CalcTextSize(HIDE_HELPK).x);
     ImGui::PopFont();
     for_size = size;
     return cached = fit.w;
@@ -296,6 +306,7 @@ void ui_draw(float pic_x, float pic_y, float pic_w, float pic_h) {
             bg->AddLine(ImVec2(pic_x, y), ImVec2(pic_x + pic_w, y), IM_COL32(255, 255, 255, 110), 1.5f);
         }
     }
+    if (g_overlay_hidden) return;  // nothing of ours but the grid
     const float margin = 20.0f;
     if (const char* t = snap_toast()) {  // after a snap: the result, where the panel's top was
         ImGui::SetNextWindowPos(ImVec2(pic_x + margin, pic_y + margin), ImGuiCond_Always);
@@ -342,6 +353,7 @@ void ui_draw(float pic_x, float pic_y, float pic_w, float pic_h) {
             ImGui::TextUnformatted(help[1]);
             if (kbm_last_used()) ImGui::TextUnformatted(HELPK_ADJ);
             ImGui::TextUnformatted(c.flight == FLIGHT_6DOF ? help[2] : c.flight == FLIGHT_SEAMOTH ? help[3] : help[4]);
+            ImGui::TextUnformatted(kbm_last_used() ? HIDE_HELPK : HIDE_HELP);
             ImGui::PopFont();
             ImGui::PopStyleColor();
         }
