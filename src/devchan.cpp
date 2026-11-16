@@ -584,6 +584,12 @@ static void run(char* line) {
         char buf[2048];
         position_dev(r, buf, sizeof buf);
         outf("%s\n", buf);
+    } else if (!strcmp(cmd, "near")) {  // near [far]: photo mode's near clip (and far, 0 = game's)
+        extern float g_pm_near, g_pm_far;
+        char* e;
+        g_pm_near = strtof(r, &e);
+        g_pm_far = strtof(e, nullptr);
+        outf("near %g far %g\n", g_pm_near, g_pm_far);
     } else if (!strcmp(cmd, "sleep")) {
         Sleep(strtol(r, nullptr, 10));
     } else {

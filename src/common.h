@@ -32,7 +32,7 @@ void kbm_pad_used();
 extern volatile bool g_photo_mode;  // photo mode on: the game sees a neutral pad
 
 // overlay.cpp
-bool overlay_init();  // hooks IDXGISwapChain::Present
+bool overlay_init();  // hooks IDXGISwapChain::Present on the game's own swap chain; call from DllMain
 
 // camera.cpp
 void camera_init();

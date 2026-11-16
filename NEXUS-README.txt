@@ -36,7 +36,7 @@ Install: Linux / Steam Deck (Proton)
 
        WINEDLLOVERRIDES="dinput8=n,b;xinput1_3=n,b" %command%
 
-Works with Seamless Co-op (tested), and next to mod loaders that use dinput8.dll (such as Mod Engine). It can't be used together with another mod that also ships an xinput1_3.dll.
+Works with Seamless Co-op (tested), with DS2LE PathTracing (snaps are taken from its 10-bit frames), and next to mod loaders that use dinput8.dll (such as Mod Engine). It can't be used together with another mod that also ships an xinput1_3.dll.
 
 
 Uninstall

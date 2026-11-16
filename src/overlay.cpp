@@ -1,5 +1,13 @@
-// Draws the panels: hooks IDXGISwapChain::Present (and ResizeBuffers) through the
-// vtable of a throwaway swap chain, and renders Dear ImGui into the back buffer.
+// Draws the panels: hooks IDXGISwapChain::Present (and ResizeBuffers) of the game's own
+// swap chain and renders Dear ImGui into its back buffer.
+//
+// The swap chain is caught as the game makes it: CreateDXGIFactory is hooked while the DLL
+// loads (before the game's code runs), and CreateSwapChain on the factories the game's own code
+// makes, so the swap chain the game gets back is the one hooked.
+// No device or swap chain of our own: renderer mods that take the first swap chain made as
+// theirs (DS2LE PathTracing, a ReShade fork) stopped the game with an assertion
+// when photo mode made a throwaway one to find Present. Only when the game made no factory
+// through the hook in 30 s (photo mode loaded late) does it fall back to that throwaway one.
 #include "common.h"
 #include <d3d11.h>
 #include <dxgi.h>
@@ -19,6 +27,7 @@ static ID3D11Device* g_dev;
 static ID3D11DeviceContext* g_ctx;
 static ID3D11RenderTargetView* g_rtv;
 static IDXGISwapChain* g_chain;
+static IDXGISwapChain* volatile g_game_chain;  // the swap chain the game made through its factory
 static bool g_ready;
 static LARGE_INTEGER g_freq, g_last;
 
@@ -31,6 +40,7 @@ static void make_rtv(IDXGISwapChain* sc) {
         // Typeless or sRGB back buffers need an explicit view format.
         rd.Format = td.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS ? DXGI_FORMAT_R8G8B8A8_UNORM
                     : td.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS ? DXGI_FORMAT_B8G8R8A8_UNORM
+                    : td.Format == DXGI_FORMAT_R10G10B10A2_TYPELESS ? DXGI_FORMAT_R10G10B10A2_UNORM
                                                                  : td.Format;
         rd.ViewDimension = td.SampleDesc.Count > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
         if (FAILED(g_dev->CreateRenderTargetView(bb, &rd, &g_rtv))) logf("overlay: CreateRenderTargetView failed");
@@ -64,7 +74,7 @@ static bool init_imgui(IDXGISwapChain* sc) {
     }
     QueryPerformanceFrequency(&g_freq);
     QueryPerformanceCounter(&g_last);
-    logf("overlay: ImGui ready");
+    logf("overlay: ImGui ready, swap chain %p", (void*)sc);
     return true;
 }
 
@@ -78,7 +88,8 @@ static bool capture(IDXGISwapChain* sc, int x, int y, int w, int h, std::vector<
                td.Format == DXGI_FORMAT_B8G8R8A8_TYPELESS || td.Format == DXGI_FORMAT_B8G8R8X8_UNORM;
     bool rgba = td.Format == DXGI_FORMAT_R8G8B8A8_UNORM || td.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB ||
                 td.Format == DXGI_FORMAT_R8G8B8A8_TYPELESS;
-    if ((!bgr && !rgba) || td.SampleDesc.Count != 1) {
+    bool rgb10 = td.Format == DXGI_FORMAT_R10G10B10A2_UNORM || td.Format == DXGI_FORMAT_R10G10B10A2_TYPELESS;
+    if ((!bgr && !rgba && !rgb10) || td.SampleDesc.Count != 1) {
         logf("snap: back buffer format %d samples %u not supported", (int)td.Format, td.SampleDesc.Count);
         bb->Release();
         return false;
@@ -103,6 +114,13 @@ static bool capture(IDXGISwapChain* sc, int x, int y, int w, int h, std::vector<
                 const uint8_t* s = (const uint8_t*)m.pData + (size_t)(y + r) * m.RowPitch + (size_t)x * 4;
                 uint8_t* d = rgb.data() + (size_t)r * w * 3;
                 for (int c = 0; c < w; c++, s += 4, d += 3) {
+                    if (rgb10) {  // DS2LE: R bits 0-9, G 10-19, B 20-29
+                        uint32_t v = *(const uint32_t*)s;
+                        d[0] = (uint8_t)(((v & 1023) * 255 + 511) / 1023);
+                        d[1] = (uint8_t)((((v >> 10) & 1023) * 255 + 511) / 1023);
+                        d[2] = (uint8_t)((((v >> 20) & 1023) * 255 + 511) / 1023);
+                        continue;
+                    }
                     d[0] = bgr ? s[2] : s[0];
                     d[1] = s[1];
                     d[2] = bgr ? s[0] : s[2];
@@ -118,6 +136,7 @@ static bool capture(IDXGISwapChain* sc, int x, int y, int w, int h, std::vector<
 }
 
 static void frame(IDXGISwapChain* sc) {
+    if (g_game_chain && sc != g_game_chain) return;  // not the game's own (a renderer mod's, a dummy)
     if (!g_ready) {
         static bool tried;
         if (tried) return;
@@ -193,9 +212,108 @@ static HRESULT STDMETHODCALLTYPE hk_resize(IDXGISwapChain* sc, UINT n, UINT w, U
     return r;
 }
 
+static void* g_present_fn;  // the Present function hooked (one per swap chain class)
+
+// Hooks Present and ResizeBuffers in `sc`'s vtable (MinHook on the functions, so every caller
+// is seen; frame() keeps to the game's swap chain).
+static SRWLOCK g_hook_lock = SRWLOCK_INIT;
+
+static bool hook_chain_class_locked(IDXGISwapChain* sc, const char* how);
+static bool hook_chain_class(IDXGISwapChain* sc, const char* how) {
+    AcquireSRWLockExclusive(&g_hook_lock);
+    bool ok = hook_chain_class_locked(sc, how);
+    ReleaseSRWLockExclusive(&g_hook_lock);
+    return ok;
+}
+
+static bool hook_chain_class_locked(IDXGISwapChain* sc, const char* how) {
+    void** vt = *(void***)sc;
+    if (g_present_fn == vt[8]) return true;
+    if (g_present_fn) {
+        logf("overlay: swap chain %p has another Present (%p, hooked %p); not hooked", (void*)sc, vt[8], g_present_fn);
+        return false;
+    }
+    if (MH_CreateHook(vt[8], (void*)hk_present, (void**)&o_present) != MH_OK ||
+        MH_CreateHook(vt[13], (void*)hk_resize, (void**)&o_resize) != MH_OK) {
+        logf("overlay: MH_CreateHook failed");
+        return false;
+    }
+    MH_EnableHook(vt[8]);
+    MH_EnableHook(vt[13]);
+    g_present_fn = vt[8];
+    logf("overlay: Present hooked at %p (%s)", vt[8], how);
+    return true;
+}
+
+// ---- the game's own swap chain, from its DXGI factory
+typedef HRESULT(STDMETHODCALLTYPE* CreateSCFn)(IDXGIFactory*, IUnknown*, DXGI_SWAP_CHAIN_DESC*, IDXGISwapChain**);
+typedef HRESULT(WINAPI* CreateFactoryFn)(REFIID, void**);
+static CreateSCFn o_create_sc;
+static CreateFactoryFn o_create_factory, o_create_factory1;
+static void* g_create_sc_fn;                   // the CreateSwapChain function hooked
+static void* volatile g_game_factories[16];   // factories the game's own code made
+static volatile LONG g_n_factories;
+
+static bool from_game(void* ret) {
+    uintptr_t b = game_base(), r = (uintptr_t)ret;
+    auto* nt = (IMAGE_NT_HEADERS*)(b + ((IMAGE_DOS_HEADER*)b)->e_lfanew);
+    return r >= b && r < b + nt->OptionalHeader.SizeOfImage;
+}
+
+static bool game_factory(void* f) {
+    LONG n = g_n_factories < 16 ? g_n_factories : 16;
+    for (LONG i = 0; i < n; i++)
+        if (g_game_factories[i] == f) return true;
+    return false;
+}
+
+static HRESULT STDMETHODCALLTYPE hk_create_sc(IDXGIFactory* f, IUnknown* dev, DXGI_SWAP_CHAIN_DESC* d, IDXGISwapChain** out) {
+    HRESULT r = o_create_sc(f, dev, d, out);
+    // Only on a factory the game made: a renderer mod hooked in front of this calls on with
+    // the same factory, so it's the swap chain the game itself holds and presents.
+    if (SUCCEEDED(r) && out && *out && game_factory(f)) {
+        logf("overlay: the game made swap chain %p (%ux%u)", (void*)*out, d ? d->BufferDesc.Width : 0, d ? d->BufferDesc.Height : 0);
+        g_game_chain = *out;
+        hook_chain_class(*out, "the game's swap chain");
+    } else if (!g_game_chain) {
+        logf("overlay: CreateSwapChain %p on factory %p not the game's (hr %08lx)", out ? (void*)*out : nullptr, (void*)f, (unsigned long)r);
+    }
+    return r;
+}
+
+static void game_made_factory(HRESULT r, void** out, const char* fn) {
+    if (FAILED(r) || !out || !*out) return;
+    LONG i = InterlockedIncrement(&g_n_factories) - 1;
+    if (i < 16) g_game_factories[i] = *out;
+    void* create = (*(void***)*out)[10];  // IDXGIFactory::CreateSwapChain
+    if (!g_create_sc_fn) {
+        if (MH_CreateHook(create, (void*)hk_create_sc, (void**)&o_create_sc) == MH_OK && MH_EnableHook(create) == MH_OK) {
+            g_create_sc_fn = create;
+            logf("overlay: the game's DXGI factory %p (%s), CreateSwapChain hooked at %p", *out, fn, create);
+        } else {
+            logf("overlay: CreateSwapChain hook failed");
+        }
+    } else if (create != g_create_sc_fn) {
+        logf("overlay: the game's DXGI factory %p (%s) has another CreateSwapChain %p", *out, fn, create);
+    }
+}
+
+static HRESULT WINAPI hk_create_factory(REFIID riid, void** out) {
+    HRESULT r = o_create_factory(riid, out);
+    if (from_game(__builtin_return_address(0))) game_made_factory(r, out, "CreateDXGIFactory");
+    return r;
+}
+
+static HRESULT WINAPI hk_create_factory1(REFIID riid, void** out) {
+    HRESULT r = o_create_factory1(riid, out);
+    if (from_game(__builtin_return_address(0))) game_made_factory(r, out, "CreateDXGIFactory1");
+    return r;
+}
+
+// ---- fallback: Present from the vtable of a throwaway swap chain
 static LRESULT CALLBACK dummy_proc(HWND h, UINT m, WPARAM w, LPARAM l) { return DefWindowProcW(h, m, w, l); }
 
-bool overlay_init() {
+static bool hook_from_dummy() {
     WNDCLASSEXW wc = {sizeof wc};
     wc.lpfnWndProc = dummy_proc;
     wc.hInstance = GetModuleHandleW(nullptr);
@@ -223,24 +341,43 @@ bool overlay_init() {
         DestroyWindow(hwnd);
         return false;
     }
-    void** vt = *(void***)sc;
-    void* present = vt[8];
-    void* resize = vt[13];
+    bool ok = hook_chain_class(sc, "a throwaway swap chain");
     sc->Release();
     ctx->Release();
     dev->Release();
     DestroyWindow(hwnd);
     UnregisterClassW(wc.lpszClassName, wc.hInstance);
+    return ok;
+}
 
-    if (MH_CreateHook(present, (void*)hk_present, (void**)&o_present) != MH_OK ||
-        MH_CreateHook(resize, (void*)hk_resize, (void**)&o_resize) != MH_OK) {
-        logf("overlay: MH_CreateHook failed");
-        return false;
+// Falls back to the throwaway swap chain when the game's wasn't caught (photo mode loaded
+// after the game made it, say).
+// Once the game's factory was seen the hook is working, and it waits for the swap chain as
+// long as it takes: the game makes it late under Seamless Co-op with DS2LE (34 s after the
+// factory), and a throwaway one made meanwhile is what crashes DS2LE.
+static DWORD WINAPI overlay_thread(void*) {
+    for (int s = 0; s < 30 && !g_game_chain && !g_n_factories; s++) Sleep(1000);
+    if (!g_game_chain && !g_n_factories) {
+        logf("overlay: the game made no DXGI factory through the hook in 30 s; using a throwaway swap chain");
+        hook_from_dummy();
     }
-    MH_EnableHook(present);
-    MH_EnableHook(resize);
-    logf("overlay: Present hooked at %p", present);
-    return true;
+    return 0;
+}
+
+// Called from DllMain, before the game's code runs: hooks the CreateDXGIFactory exports the
+// game imports (from whichever dxgi.dll it loaded: the system's, or a renderer mod's proxy).
+bool overlay_init() {
+    HMODULE dxgi = GetModuleHandleW(L"dxgi.dll");
+    void* f0 = dxgi ? (void*)GetProcAddress(dxgi, "CreateDXGIFactory") : nullptr;
+    void* f1 = dxgi ? (void*)GetProcAddress(dxgi, "CreateDXGIFactory1") : nullptr;
+    bool ok = f0 && MH_CreateHook(f0, (void*)hk_create_factory, (void**)&o_create_factory) == MH_OK;
+    if (f1 && MH_CreateHook(f1, (void*)hk_create_factory1, (void**)&o_create_factory1) != MH_OK) f1 = nullptr;
+    if (ok) MH_EnableHook(f0);
+    if (f1) MH_EnableHook(f1);
+    logf("overlay: CreateDXGIFactory %s, CreateDXGIFactory1 %s", ok ? "hooked" : "not hooked", f1 ? "hooked" : "not hooked");
+    HANDLE t = CreateThread(nullptr, 0, overlay_thread, nullptr, 0, nullptr);
+    if (t) CloseHandle(t);
+    return ok;
 }
 
 }  // namespace pm

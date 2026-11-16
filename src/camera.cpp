@@ -6,7 +6,7 @@
 // slot to the renderer with one call (rva 0x39b070 in the Steam build, found by the
 // pattern below: the call just before `cmp dword [rdi+0x48], 2` in CameraManager's
 // update). That function is hooked: while photo mode is on, the slot gets our camera
-// before the game passes it on. The operator itself is left alone, so leaving photo
+// and a small near clip (see g_pm_near) before the game passes it on. The operator itself is left alone, so leaving photo
 // mode puts the game's own camera straight back.
 #include "camera.h"
 #include "MinHook.h"
@@ -18,6 +18,15 @@ namespace pm {
 // Slot layout (rows: right, up, forward, position; each padded to 4 floats).
 struct alignas(16) Mat4 { float m[4][4]; };
 static const size_t SLOT_FOV = 0x50;
+static const size_t SLOT_NEAR = 0x54;
+static const size_t SLOT_FAR = 0x58;
+// Near clip while photo mode is on (metres). The game's is 0.1 (far 5000), which cuts a
+// character open when the camera is close. Tested in game: 0.003 draws the
+// character, ground and distant houses cleanly; 0.001 already z-fights on a house 25 m away
+// (the depth buffer runs out of precision at far/near = 5e6), and 0.0003 is worse. Dev builds
+// can change it (`near F` in devchan, F10 steps it).
+float g_pm_near = 0.003f;
+float g_pm_far = 0;  // 0: leave the game's far alone
 
 static SRWLOCK g_lock = SRWLOCK_INIT;
 static CamState g_cam;          // ours, while photo mode is on
@@ -126,7 +135,27 @@ static void __fastcall hk_publish(void* self, uint8_t* slot) {
     camera_lock();
     memcpy(&g_game_mat, slot, sizeof g_game_mat);
     g_game_fov = *(float*)(slot + SLOT_FOV);
+    static int n_log;
+    if (n_log < 6 && (g_photo_mode || n_log == 0) && n_log++ >= 0)
+        logf("camera: game near %.5f far %.2f (photo mode %d)", *(float*)(slot + SLOT_NEAR), *(float*)(slot + SLOT_FAR),
+             (int)g_photo_mode);
+#ifdef PM_DEV
+    {  // F10 steps the near value (0 = the game's own), for testing in game
+        static const float steps[] = {0, 0.01f, 0.005f, 0.003f, 0.002f, 0.001f, 0.1f};
+        static int idx = 3;
+        static bool was;
+        bool down = (GetAsyncKeyState(VK_F10) & 0x8000) != 0;
+        if (down && !was) {
+            idx = (idx + 1) % 7;
+            g_pm_near = steps[idx];
+            logf("camera: near now %g", g_pm_near);
+        }
+        was = down;
+    }
+#endif
     if (g_photo_mode && g_cam_valid) {
+        if (g_pm_near > 0) *(float*)(slot + SLOT_NEAR) = g_pm_near;
+        if (g_pm_far > 0) *(float*)(slot + SLOT_FAR) = g_pm_far;
         Mat4 m;
         build(g_cam, m);
         memcpy(slot, &m, sizeof m);
