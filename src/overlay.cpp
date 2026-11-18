@@ -29,6 +29,7 @@ static ID3D11RenderTargetView* g_rtv;
 static IDXGISwapChain* g_chain;
 static IDXGISwapChain* volatile g_game_chain;  // the swap chain the game made through its factory
 static bool g_ready;
+static UINT g_bb_w, g_bb_h;  // the back buffer texture's real size (make_rtv)
 static LARGE_INTEGER g_freq, g_last;
 
 static void make_rtv(IDXGISwapChain* sc) {
@@ -44,7 +45,14 @@ static void make_rtv(IDXGISwapChain* sc) {
                                                                  : td.Format;
         rd.ViewDimension = td.SampleDesc.Count > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
         if (FAILED(g_dev->CreateRenderTargetView(bb, &rd, &g_rtv))) logf("overlay: CreateRenderTargetView failed");
+        g_bb_w = td.Width;
+        g_bb_h = td.Height;
         logf("overlay: back buffer %ux%u format %d samples %u", td.Width, td.Height, (int)td.Format, td.SampleDesc.Count);
+        // Upscalers (DS2LE's DLSS) can make GetDesc report the render size, not the buffer's.
+        DXGI_SWAP_CHAIN_DESC d;
+        if (SUCCEEDED(sc->GetDesc(&d)) && (d.BufferDesc.Width != td.Width || d.BufferDesc.Height != td.Height))
+            logf("overlay: GetDesc says %ux%u, back buffer is %ux%u; using the back buffer", d.BufferDesc.Width,
+                 d.BufferDesc.Height, td.Width, td.Height);
         bb->Release();
     }
 }
@@ -163,10 +171,9 @@ static void frame(IDXGISwapChain* sc) {
     devchan_frame();
 #endif
 
-    DXGI_SWAP_CHAIN_DESC d;
-    sc->GetDesc(&d);
+    // The size of the texture we draw into, not GetDesc's (see make_rtv).
     ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2((float)d.BufferDesc.Width, (float)d.BufferDesc.Height);
+    io.DisplaySize = ImVec2((float)g_bb_w, (float)g_bb_h);
     io.DeltaTime = dt;
     ImGui_ImplDX11_NewFrame();
     ImGui::NewFrame();

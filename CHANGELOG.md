@@ -3,6 +3,10 @@
 Each release's notes are posted to the Nexus changelog from here when it is uploaded.
 Write one `## VERSION` section per release, one line per note.
 
+## 1.3.1
+
+With DS2LE's DLSS on, the photo mode panel sat too high and snaps were cropped; both now use the real screen size.
+
 ## 1.3.0
 
 Works with DS2LE PathTracing: photo mode now hooks the game's own swap chain instead of creating one of its own, so the game no longer stops at startup.
